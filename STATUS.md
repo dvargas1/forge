@@ -47,11 +47,22 @@ many machines through Alloy's native `remotecfg`.
 
 ### Secrets
 - Least plumbing: a credential exists **only when the destination needs one**.
-- When needed, the generated River references a file (e.g. `password_file`) under
-  `/etc/alloy/secrets/` (0600, owned by `alloy`), never an inline literal.
-- The value lives on the Forge server, marked **write-only** in the portal (Forge
-  writes it and never reads it back). The file is written/rotated on the host over
-  SSH, or created at join time by the bootstrap script.
+- When needed, the generated River references a file (`password_file`,
+  `bearer_token_file`, `credentials_file`) under `/etc/alloy/secrets/` (0600,
+  owned by `alloy`), never an inline literal. `password_file` / `credentials_file`
+  are confirmed as supported by Alloy's shared HTTP client config.
+- **The master value lives only on the Forge server**, marked **write-only** in the
+  portal (Forge writes it and never reads it back).
+- **Every host that authenticates needs its own copy of the file**, because Alloy
+  reads it locally, on the machine running the pipeline. The server provisions it
+  over SSH at join time and on rotation. Unavoidable in any design: the credential
+  material must exist on the authenticating host, inline or in a file.
+- Why a file beats inline in fleet mode: an inline secret is re-sent over the wire
+  and rewritten to disk on every config change; a file is pushed once and rotation
+  is decoupled from config rendering (Alloy re-reads the file).
+- Rotation: the server rewrites the file on every host using that destination,
+  over the same SSH channel used for lifecycle, reporting success or failure per
+  host in the portal.
 
 ### State
 - State lives on the **Forge server**, in embedded **SQLite** behind a storage
@@ -93,12 +104,19 @@ package and the `grafana/alloy-remote-config` proto.
 - **Later:** Postgres storage, declarative catalog recipes for third-party
   contributions, TUI, opt-in drift reconcile, staged rollout.
 
-## Open questions
-- Exactly what stays in the local config on a joined host (proposed: the
-  `remotecfg` block, attributes, logging, and an optional `local.alloy` escape
-  hatch).
-- Secret rotation path (proposed: the server writes the secret file over SSH,
-  same channel used for lifecycle).
+## Local config on a joined host
+A joined host keeps exactly three things locally:
+
+1. the `remotecfg` block (url, token, `attributes`),
+2. a `logging` block with a configurable level,
+3. an optional `local.alloy` escape hatch for machine-local needs that must keep
+   working offline.
+
+Everything else, including the base configuration, is composed server-side and
+delivered as one full config file per machine. The portal flags `local.alloy`
+content as unmanaged, since it bypasses the server as source of truth. The
+`attributes` are the one thing the host must declare itself: they are the key the
+server uses to tell machines apart. "Minimal" does not mean "empty".
 
 ## Access
 - Repo: local `/home/ubuntu/forge`, no git remote configured yet
